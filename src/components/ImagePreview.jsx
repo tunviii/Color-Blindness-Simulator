@@ -1,4 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+import { applySimulation } from "./utils/applySimulation";
 
 const modeDetails = {
   protanopia: {
@@ -23,16 +25,45 @@ const modeDetails = {
   },
 };
 
-const simulationFilters = {
-  protanopia: "sepia(0.36) saturate(0.76) hue-rotate(-18deg)",
-  deuteranopia: "sepia(0.28) saturate(0.68) hue-rotate(18deg)",
-  tritanopia: "sepia(0.18) saturate(0.82) hue-rotate(72deg)",
-  achromatopsia: "grayscale(1)",
-};
+function SimulationCanvas({ image, mode, severity, className, style, ariaLabel }) {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    let disposed = false;
+    let resizeObserver;
+
+    const render = async () => {
+      const canvas = canvasRef.current;
+      if (!canvas || !image || disposed) return;
+
+      try {
+        await applySimulation(canvas, image, mode, severity);
+      } catch {
+        // The preview should fail softly if the image cannot be decoded.
+      }
+    };
+
+    render();
+
+    const canvas = canvasRef.current;
+    if (canvas && typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => {
+        render();
+      });
+      resizeObserver.observe(canvas);
+    }
+
+    return () => {
+      disposed = true;
+      resizeObserver?.disconnect();
+    };
+  }, [image, mode, severity]);
+
+  return <canvas ref={canvasRef} className={className} style={style} aria-label={ariaLabel} />;
+}
 
 function ImagePreview({ image, mode, severity, compareMode, onReset }) {
   const detail = modeDetails[mode] ?? modeDetails.protanopia;
-  const filterStrength = severity / 100;
   const sliderRef = useRef(null);
   const [sliderPosition, setSliderPosition] = useState(50);
 
@@ -78,13 +109,8 @@ function ImagePreview({ image, mode, severity, compareMode, onReset }) {
     }
   };
 
-  const simulatedStyle = {
-    filter: `${simulationFilters[mode]} opacity(${0.82 + filterStrength * 0.18})`,
-  };
-
   return (
     <section className="grid min-w-0 gap-5">
-
       <div className="surface flex flex-col gap-3 rounded-2xl p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-display text-xl font-bold tracking-tight text-app sm:text-2xl">
@@ -110,121 +136,85 @@ function ImagePreview({ image, mode, severity, compareMode, onReset }) {
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_17rem]">
         <article className="surface overflow-hidden rounded-2xl">
-
           <div className="checkerboard grid min-h-112 place-items-center p-3 sm:p-6">
             {compareMode === "side-by-side" ? (
               <div className="grid w-full gap-3 md:grid-cols-2">
-                <figure className="relative overflow-hidden rounded-xl border" style={{ borderColor: "var(--color-border)", background: "var(--color-card)" }}>
+                <figure className="relative min-h-[24rem] overflow-hidden rounded-xl border" style={{ borderColor: "var(--color-border)", background: "var(--color-card)" }}>
                   <span className="absolute left-3 top-3 z-10 rounded-full bg-black/60 px-3 py-1 text-xs font-semibold text-white">
                     Original
                   </span>
                   <img
                     src={image}
                     alt="Uploaded original"
-                    className="max-h-136 w-full object-contain"
+                    className="absolute inset-0 h-full w-full object-contain"
                   />
                 </figure>
 
-                <figure className="relative overflow-hidden rounded-xl border" style={{ borderColor: "var(--color-border)", background: "var(--color-card)" }}>
+                <figure className="relative min-h-[24rem] overflow-hidden rounded-xl border" style={{ borderColor: "var(--color-border)", background: "var(--color-card)" }}>
                   <span className="absolute right-3 top-3 z-10 rounded-full bg-black/60 px-3 py-1 text-xs font-semibold text-white">
                     {detail.label}
                   </span>
-                  <img
-                    src={image}
-                    alt={`${detail.label} simulated preview`}
-                    className="max-h-136 w-full object-contain"
-                    style={simulatedStyle}
+                  <SimulationCanvas
+                    image={image}
+                    mode={mode}
+                    severity={severity}
+                    className="absolute inset-0 block h-full w-full"
+                    ariaLabel={`${detail.label} simulated preview`}
                   />
                 </figure>
               </div>
             ) : (
               <div className="relative w-full max-w-5xl overflow-hidden rounded-2xl border shadow-sm" style={{ borderColor: "var(--color-border)", background: "var(--color-card)" }}>
-                {compareMode === "slider" ? (
+                <div
+                  ref={sliderRef}
+                  className="relative min-h-[28rem] w-full overflow-hidden cursor-col-resize touch-none"
+                  onPointerDown={handlePointerDown}
+                >
+                  <img
+                    src={image}
+                    alt="Uploaded original"
+                    className="absolute inset-0 h-full w-full object-contain"
+                  />
+
+                  <SimulationCanvas
+                    image={image}
+                    mode={mode}
+                    severity={severity}
+                    className="absolute inset-0 block h-full w-full"
+                    style={{
+                      clipPath: `inset(0 0 0 ${Math.max(0, sliderPosition)}%)`,
+                    }}
+                    ariaLabel={`${detail.label} simulated preview`}
+                  />
+
+                  <span className="absolute left-3 top-3 z-10 rounded-full bg-black/60 px-3 py-1 text-xs font-semibold text-white">
+                    Original
+                  </span>
+                  <span className="absolute right-3 top-3 z-10 rounded-full bg-black/60 px-3 py-1 text-xs font-semibold text-white">
+                    {detail.label}
+                  </span>
+
                   <div
-                    ref={sliderRef}
-                    className="relative min-h-[28rem] w-full overflow-hidden cursor-col-resize touch-none"
-                    onPointerDown={handlePointerDown}
+                    className="absolute inset-y-0 w-px bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.18)]"
+                    style={{ left: `${sliderPosition}%` }}
+                  />
+
+                  <button
+                    type="button"
+                    className="focus-ring absolute top-1/2 grid h-12 w-12 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full text-sm font-bold text-white shadow-lg pressable"
+                    style={{
+                      left: `${sliderPosition}%`,
+                      background: "var(--color-accent)",
+                    }}
+                    aria-label="Adjust comparison slider"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(sliderPosition)}
+                    onKeyDown={handleHandleKeyDown}
                   >
-                    <img
-                      src={image}
-                      alt="Uploaded original"
-                      className="absolute inset-0 h-full w-full object-contain"
-                      style={{
-                        clipPath: `inset(0 ${Math.max(0, 100 - sliderPosition)}% 0 0)`,
-                      }}
-                    />
-
-                    <img
-                      src={image}
-                      alt={`${detail.label} simulated preview`}
-                      className="absolute inset-0 h-full w-full object-contain"
-                      style={{
-                        ...simulatedStyle,
-                        clipPath: `inset(0 0 0 ${Math.max(0, sliderPosition)}%)`,
-                      }}
-                    />
-
-                    <span className="absolute left-3 top-3 z-10 rounded-full bg-black/60 px-3 py-1 text-xs font-semibold text-white">
-                      Original
-                    </span>
-                    <span className="absolute right-3 top-3 z-10 rounded-full bg-black/60 px-3 py-1 text-xs font-semibold text-white">
-                      {detail.label}
-                    </span>
-
-                    <div
-                      className="absolute inset-y-0 w-px bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.18)]"
-                      style={{ left: `${sliderPosition}%` }}
-                    />
-
-                    <button
-                      type="button"
-                      className="focus-ring absolute top-1/2 grid h-12 w-12 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full text-sm font-bold text-white shadow-lg pressable"
-                      style={{
-                        left: `${sliderPosition}%`,
-                        background: "var(--color-accent)",
-                      }}
-                      aria-label="Adjust comparison slider"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={Math.round(sliderPosition)}
-                      onKeyDown={handleHandleKeyDown}
-                    >
-                      ||
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <img
-                      src={image}
-                      alt="Uploaded original"
-                      className="max-h-152 w-full object-contain"
-                    />
-
-                    <div
-                      className={`absolute inset-0 transition-opacity duration-200 ${compareMode === "flip" ? "opacity-0 hover:opacity-100 focus-within:opacity-100" : ""}`}
-                    >
-                      <img
-                        src={image}
-                        alt={`${detail.label} simulated preview`}
-                        className="h-full w-full object-contain"
-                        style={simulatedStyle}
-                      />
-                    </div>
-
-                    <span className="absolute left-3 top-3 rounded-full bg-black/60 px-3 py-1 text-xs font-semibold text-white">
-                      Original
-                    </span>
-                    <span className="absolute right-3 top-3 rounded-full bg-black/60 px-3 py-1 text-xs font-semibold text-white">
-                      {detail.label}
-                    </span>
-                  </>
-                )}
-
-                <canvas
-                  id="simulationCanvas"
-                  className="sr-only"
-                  aria-hidden="true"
-                />
+                    ||
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -270,7 +260,6 @@ function ImagePreview({ image, mode, severity, compareMode, onReset }) {
               Reset
             </button>
           </div>
-
         </article>
 
         <aside id="about" className="surface rounded-2xl p-5">
